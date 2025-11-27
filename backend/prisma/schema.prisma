@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id            Int       @id @default(autoincrement())
+  name          String    @unique
+  description   String?
+  price         Decimal   @db.Decimal(10, 2)
+
+  isBestSeller  Boolean   @default(false)
+  isAvailable   Boolean   @default(true)
+  sideDishCount Int       @default(0)
+  categoryId    Int
+  category      Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  orderItems    OrderItem[]
+
+  @@map("products")
+}
+
+model SideDish {
+  id          Int                 @id @default(autoincrement())
+  name        String              @unique
+  description String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  orderItems  OrderItemSideDish[]
+
+  @@map("side_dishes")
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  telegramId String   @unique
+  firstName  String?
+  lastName   String?
+  username   String?
+  phone      String?
+  address    String?
+  latitude   Decimal? @db.Decimal(10, 8)
+  longitude  Decimal? @db.Decimal(11, 8)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now())
+  orders     Order[]
+
+  @@map("users")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  MOBILE_PAYMENT
+}
+
+model Order {
+  id            Int           @id @default(autoincrement())
+  userId        Int
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        OrderStatus   @default(PENDING)
+  paymentMethod PaymentMethod?
+  total         Decimal       @db.Decimal(10, 2)
+  address       String?
+  latitude      Decimal?      @db.Decimal(10, 8)
+  longitude     Decimal?      @db.Decimal(11, 8)
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  items         OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id        Int                 @id @default(autoincrement())
+  orderId   Int
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId Int
+  product   Product             @relation(fields: [productId], references: [id])
+  quantity  Int                 @default(1)
+  price     Decimal             @db.Decimal(10, 2)
+  createdAt DateTime            @default(now())
+  sideDishes OrderItemSideDish[]
+
+  @@map("order_items")
+}
+
+model OrderItemSideDish {
+  id          Int       @id @default(autoincrement())
+  orderItemId Int
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  sideDishId  Int
+  sideDish    SideDish  @relation(fields: [sideDishId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@unique([orderItemId, sideDishId])
+  @@map("order_item_side_dishes")
+}
+
