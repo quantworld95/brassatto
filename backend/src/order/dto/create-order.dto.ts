@@ -33,10 +33,16 @@ class CreateOrderItemDto {
 }
 
 export class CreateOrderDto {
-  @ApiProperty({ description: 'ID del usuario', example: 1 })
+  @ApiProperty({ description: 'ID del cliente', example: 1 })
   @IsInt()
   @Type(() => Number)
-  userId: number;
+  clienteId: number;
+
+  @ApiPropertyOptional({ description: 'ID del conductor asignado (opcional)', example: 1 })
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  conductorId?: number;
 
   @ApiPropertyOptional({ description: 'Método de pago', enum: PaymentMethod, example: PaymentMethod.CASH })
   @IsEnum(PaymentMethod)
@@ -72,3 +78,42 @@ export class CreateOrderDto {
   items: CreateOrderItemDto[];
 }
 
+// DTO para crear orden desde Telegram (usando telegramId en lugar de clienteId)
+export class CreateOrderTelegramDto {
+  @ApiProperty({ description: 'Telegram ID del cliente', example: '123456789' })
+  @IsString()
+  telegramId: string;
+
+  @ApiPropertyOptional({ description: 'Método de pago', enum: PaymentMethod, example: PaymentMethod.CASH })
+  @IsEnum(PaymentMethod)
+  @IsOptional()
+  paymentMethod?: PaymentMethod;
+
+  @ApiPropertyOptional({ description: 'Dirección de entrega', example: 'Av. Arce #2631, Zona San Jorge, La Paz' })
+  @IsString()
+  @IsOptional()
+  address?: string;
+
+  @ApiPropertyOptional({ description: 'Latitud de la ubicación de entrega', example: -16.5000 })
+  @IsNumber({ maxDecimalPlaces: 8 })
+  @IsOptional()
+  @Type(() => Number)
+  latitude?: number;
+
+  @ApiPropertyOptional({ description: 'Longitud de la ubicación de entrega', example: -68.1500 })
+  @IsNumber({ maxDecimalPlaces: 8 })
+  @IsOptional()
+  @Type(() => Number)
+  longitude?: number;
+
+  @ApiPropertyOptional({ description: 'Notas adicionales para la orden', example: 'Sin cebolla' })
+  @IsString()
+  @IsOptional()
+  notes?: string;
+
+  @ApiProperty({ description: 'Items de la orden', type: [CreateOrderItemDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateOrderItemDto)
+  items: CreateOrderItemDto[];
+}

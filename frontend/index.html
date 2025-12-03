@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PWA para pruebas del sistema de asignación de pedidos">
+  <title>Driver PWA - Sistema de Asignación</title>
+  
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1a1a1a">
+  
+  <!-- Estilos -->
+  <link rel="stylesheet" href="css/styles.css">
+  
+  <!-- Indicador de carga -->
+  <style>
+    #loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      color: white;
+    }
+    #loading-screen.hidden {
+      display: none;
+    }
+    .spinner {
+      border: 4px solid #333;
+      border-top: 4px solid #8b5cf6;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Pantalla de carga -->
+  <div id="loading-screen">
+    <div class="spinner"></div>
+    <p>Cargando aplicación...</p>
+  </div>
+  <!-- Contenedor principal -->
+  <div id="app">
+    <!-- Vista: Home (Selección de modo) -->
+    <div id="view-home" class="view active">
+      <div class="container">
+        <h1>🧪 MODO DE PRUEBA</h1>
+        <div class="mode-selection">
+          <div class="mode-card" onclick="navigateTo('/cliente')">
+            <div class="mode-icon">👤</div>
+            <h2>CLIENTE</h2>
+            <p>Crear pedidos</p>
+          </div>
+          
+          <div class="mode-card" onclick="navigateTo('/conductor')">
+            <div class="mode-icon">🚗</div>
+            <h2>CONDUCTOR</h2>
+            <p>Simular conductor</p>
+          </div>
+          
+          <div class="mode-card" onclick="navigateTo('/admin')">
+            <div class="mode-icon">👨‍💼</div>
+            <h2>ADMIN</h2>
+            <p>Dashboard monitoreo</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vista: Cliente (Órdenes) -->
+    <div id="view-cliente" class="view">
+      <div class="container">
+        <div class="view-header">
+          <button class="btn-back" onclick="navigateTo('/')">🏠 Inicio</button>
+          <h1>👤 VISTA DE ÓRDENES</h1>
+        </div>
+        <div id="ordenes-container"></div>
+      </div>
+    </div>
+
+    <!-- Vista: Conductor -->
+    <div id="view-conductor" class="view">
+      <div class="container">
+        <div class="view-header">
+          <button class="btn-back" onclick="navigateTo('/')">🏠 Inicio</button>
+          <h1>🚗 CONDUCTOR</h1>
+        </div>
+        <div id="conductor-container"></div>
+      </div>
+    </div>
+
+    <!-- Vista: Admin -->
+    <div id="view-admin" class="view">
+      <div class="container">
+        <div class="view-header">
+          <button class="btn-back" onclick="navigateTo('/')">🏠 Inicio</button>
+          <h1>👨‍💼 VISTA ADMIN</h1>
+        </div>
+        <div id="admin-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cargar Google Maps de forma asíncrona -->
+  <script>
+    // Función para cargar Google Maps de forma asíncrona
+    function loadGoogleMaps() {
+      return new Promise((resolve, reject) => {
+        if (typeof google !== 'undefined' && google.maps) {
+          resolve();
+          return;
+        }
+        
+        const script = document.createElement('script');
+        script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyBsvXuuNIVsGG2NTsY6gpvNZ5wvSgR1wpQ&libraries=places&callback=initApp';
+        script.async = true;
+        script.defer = true;
+        script.onerror = reject;
+        document.head.appendChild(script);
+        
+        // Timeout de seguridad
+        setTimeout(() => {
+          if (typeof google === 'undefined' || !google.maps) {
+            reject(new Error('Google Maps no se cargó en el tiempo esperado'));
+          }
+        }, 10000);
+      });
+    }
+    
+    // Función de inicialización cuando Google Maps esté listo
+    let appLoaded = false;
+    window.initApp = function() {
+      console.log('✅ Google Maps cargado');
+      if (!appLoaded) {
+        appLoaded = true;
+        loadApp();
+      }
+    };
+    
+    // Cargar Socket.IO de forma asíncrona
+    function loadSocketIO() {
+      return new Promise((resolve, reject) => {
+        if (typeof io !== 'undefined') {
+          resolve();
+          return;
+        }
+        
+        const script = document.createElement('script');
+        script.src = 'https://cdn.socket.io/4.5.4/socket.io.min.js';
+        script.async = true;
+        script.onerror = reject;
+        script.onload = resolve;
+        document.head.appendChild(script);
+      });
+    }
+    
+    // Cargar scripts de la aplicación
+    function loadAppScripts() {
+      return Promise.all([
+        loadScript('js/app.js'),
+        loadScript('js/api.js'),
+        loadScript('js/map.js'),
+        loadScript('js/cliente/ordenes.js'),
+        loadScript('js/conductor/conductor.js'),
+        loadScript('js/admin/admin.js')
+      ]);
+    }
+    
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onerror = reject;
+        script.onload = resolve;
+        document.body.appendChild(script);
+      });
+    }
+    
+    // Función principal de carga
+    async function loadApp() {
+      try {
+        console.log('⏳ Cargando aplicación...');
+        
+        // Ocultar pantalla de carga inmediatamente (mostrar contenido básico)
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen) {
+          setTimeout(() => {
+            loadingScreen.classList.add('hidden');
+          }, 500); // Ocultar después de 500ms máximo
+        }
+        
+        // Cargar scripts críticos primero (sin esperar Google Maps)
+        await loadAppScripts();
+        
+        // Cargar Socket.IO en segundo plano (no bloquea)
+        loadSocketIO().catch(err => {
+          console.warn('⚠️ Socket.IO no se pudo cargar:', err);
+        });
+        
+        console.log('✅ Aplicación cargada');
+      } catch (error) {
+        console.error('❌ Error al cargar aplicación:', error);
+        if (loadingScreen) {
+          loadingScreen.innerHTML = `
+            <div style="text-align: center;">
+              <h2>❌ Error al cargar</h2>
+              <p>${error.message}</p>
+              <button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #8b5cf6; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                🔄 Reintentar
+              </button>
+            </div>
+          `;
+        }
+      }
+    }
+    
+    // Manejo de errores globales
+    window.addEventListener('error', function(e) {
+      console.error('❌ Error en la aplicación:', e.error);
+    });
+    
+    // Iniciar carga inmediatamente (no esperar Google Maps)
+    // Google Maps se cargará en segundo plano cuando sea necesario
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        // Cargar app inmediatamente
+        if (!appLoaded) {
+          appLoaded = true;
+          loadApp();
+        }
+        // Cargar Google Maps en segundo plano (no bloquea)
+        loadGoogleMaps().catch(err => {
+          console.warn('⚠️ Google Maps se cargará cuando sea necesario:', err);
+        });
+      });
+    } else {
+      // Cargar app inmediatamente
+      if (!appLoaded) {
+        appLoaded = true;
+        loadApp();
+      }
+      // Cargar Google Maps en segundo plano (no bloquea)
+      loadGoogleMaps().catch(err => {
+        console.warn('⚠️ Google Maps se cargará cuando sea necesario:', err);
+      });
+    }
+  </script>
+</body>
+</html>
+

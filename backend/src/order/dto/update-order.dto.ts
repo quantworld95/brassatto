@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsString,
   IsNumber,
+  IsInt,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OrderStatus, PaymentMethod } from '@prisma/client';
@@ -15,6 +16,11 @@ export class UpdateOrderDto {
   @IsEnum(PaymentMethod)
   @IsOptional()
   paymentMethod?: PaymentMethod;
+
+  @IsInt()
+  @IsOptional()
+  @Type(() => Number)
+  conductorId?: number;
 
   @IsString()
   @IsOptional()
@@ -35,3 +41,8 @@ export class UpdateOrderDto {
   notes?: string;
 }
 
+export class AssignConductorDto {
+  @IsInt()
+  @Type(() => Number)
+  conductorId: number;
+}

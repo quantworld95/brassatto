@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateOrderDto, CreateOrderTelegramDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { OrderStatus, PaymentMethod } from '@prisma/client';
 import { MenuService } from '../menu/menu.service';
@@ -10,15 +11,27 @@ export class OrderService {
   constructor(
     private prisma: PrismaService,
     private menuService: MenuService,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   async createOrder(createOrderDto: CreateOrderDto, deliveryFee: number = 10) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: createOrderDto.userId },
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { id: createOrderDto.clienteId },
+      include: { usuario: true },
     });
 
-    if (!user) {
-      throw new NotFoundException(`User with ID ${createOrderDto.userId} not found`);
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con ID ${createOrderDto.clienteId} no encontrado`);
+    }
+
+    // Verificar conductor si se especifica
+    if (createOrderDto.conductorId) {
+      const conductor = await this.prisma.conductor.findUnique({
+        where: { id: createOrderDto.conductorId },
+      });
+      if (!conductor) {
+        throw new NotFoundException(`Conductor con ID ${createOrderDto.conductorId} no encontrado`);
+      }
     }
 
     let subtotal = 0;
@@ -28,13 +41,13 @@ export class OrderService {
       const product = await this.menuService.findProductById(item.productId);
       
       if (!product.isAvailable) {
-        throw new BadRequestException(`Product ${product.name} is not available`);
+        throw new BadRequestException(`Producto ${product.name} no está disponible`);
       }
 
       if (item.sideDishIds && item.sideDishIds.length > 0) {
         if (product.sideDishCount > 0 && item.sideDishIds.length > product.sideDishCount) {
           throw new BadRequestException(
-            `Product ${product.name} allows maximum ${product.sideDishCount} side dishes`,
+            `Producto ${product.name} permite máximo ${product.sideDishCount} guarniciones`,
           );
         }
         await this.menuService.validateSideDishes(item.sideDishIds);
@@ -55,22 +68,38 @@ export class OrderService {
 
     const total = subtotal + deliveryFee;
 
-    return this.prisma.order.create({
+    // Por defecto, crear pedido en estado READY_FOR_PICKUP
+    const orderStatus = OrderStatus.READY_FOR_PICKUP;
+
+    const createdOrder = await this.prisma.order.create({
       data: {
-        userId: createOrderDto.userId,
-        status: OrderStatus.PENDING,
+        clienteId: createOrderDto.clienteId,
+        conductorId: createOrderDto.conductorId,
+        status: orderStatus,
         paymentMethod: createOrderDto.paymentMethod,
         total,
-        address: createOrderDto.address || user.address,
-        latitude: createOrderDto.latitude || user.latitude,
-        longitude: createOrderDto.longitude || user.longitude,
+        address: createOrderDto.address || cliente.direccion,
+        latitude: createOrderDto.latitude || cliente.latitud,
+        longitude: createOrderDto.longitude || cliente.longitud,
         notes: createOrderDto.notes,
         items: {
-          create: orderItems,
+          create: orderItems.map(item => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+            sideDishes: {
+              create: item.sideDishes,
+            },
+          })),
         },
       },
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -83,12 +112,47 @@ export class OrderService {
         },
       },
     });
+
+    // Emitir evento si el pedido se creó en estado READY_FOR_PICKUP
+    if (orderStatus === OrderStatus.READY_FOR_PICKUP) {
+      this.eventEmitter.emit('order.ready_for_pickup', createdOrder.id);
+    }
+
+    return createdOrder;
+  }
+
+  async createOrderByTelegramId(createOrderDto: CreateOrderTelegramDto, deliveryFee: number = 10) {
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { telegramId: createOrderDto.telegramId },
+    });
+
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con Telegram ID ${createOrderDto.telegramId} no encontrado`);
+    }
+
+    // Convertir a CreateOrderDto y llamar al método principal
+    const orderDto: CreateOrderDto = {
+      clienteId: cliente.id,
+      paymentMethod: createOrderDto.paymentMethod,
+      address: createOrderDto.address,
+      latitude: createOrderDto.latitude,
+      longitude: createOrderDto.longitude,
+      notes: createOrderDto.notes,
+      items: createOrderDto.items,
+    };
+
+    return this.createOrder(orderDto, deliveryFee);
   }
 
   async findAllOrders() {
     return this.prisma.order.findMany({
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -99,6 +163,7 @@ export class OrderService {
             },
           },
         },
+        deliveryStop: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -110,7 +175,12 @@ export class OrderService {
     const order = await this.prisma.order.findUnique({
       where: { id },
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -119,30 +189,38 @@ export class OrderService {
                 sideDish: true,
               },
             },
+          },
+        },
+        deliveryStop: {
+          include: {
+            batch: true,
           },
         },
       },
     });
 
     if (!order) {
-      throw new NotFoundException(`Order with ID ${id} not found`);
+      throw new NotFoundException(`Orden con ID ${id} no encontrada`);
     }
 
     return order;
   }
 
-  async findOrdersByUserId(userId: number) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
+  async findOrdersByClienteId(clienteId: number) {
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { id: clienteId },
     });
 
-    if (!user) {
-      throw new NotFoundException(`User with ID ${userId} not found`);
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con ID ${clienteId} no encontrado`);
     }
 
     return this.prisma.order.findMany({
-      where: { userId },
+      where: { clienteId },
       include: {
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -153,6 +231,7 @@ export class OrderService {
             },
           },
         },
+        deliveryStop: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -161,17 +240,32 @@ export class OrderService {
   }
 
   async findOrdersByTelegramId(telegramId: string) {
-    const user = await this.prisma.user.findUnique({
+    const cliente = await this.prisma.cliente.findUnique({
       where: { telegramId },
     });
 
-    if (!user) {
-      throw new NotFoundException(`User with Telegram ID ${telegramId} not found`);
+    if (!cliente) {
+      throw new NotFoundException(`Cliente con Telegram ID ${telegramId} no encontrado`);
+    }
+
+    return this.findOrdersByClienteId(cliente.id);
+  }
+
+  async findOrdersByConductorId(conductorId: number) {
+    const conductor = await this.prisma.conductor.findUnique({
+      where: { id: conductorId },
+    });
+
+    if (!conductor) {
+      throw new NotFoundException(`Conductor con ID ${conductorId} no encontrado`);
     }
 
     return this.prisma.order.findMany({
-      where: { userId: user.id },
+      where: { conductorId },
       include: {
+        cliente: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -182,6 +276,7 @@ export class OrderService {
             },
           },
         },
+        deliveryStop: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -193,7 +288,12 @@ export class OrderService {
     return this.prisma.order.findMany({
       where: { status },
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -211,6 +311,28 @@ export class OrderService {
     });
   }
 
+  async findPendingOrdersForAssignment() {
+    return this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.READY_FOR_PICKUP,
+        conductorId: null,
+      },
+      include: {
+        cliente: {
+          include: { usuario: true },
+        },
+        items: {
+          include: {
+            product: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+  }
+
   async updateOrder(id: number, updateOrderDto: UpdateOrderDto) {
     await this.findOrderById(id);
 
@@ -218,7 +340,12 @@ export class OrderService {
       where: { id },
       data: updateOrderDto,
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -237,18 +364,23 @@ export class OrderService {
     const order = await this.findOrderById(id);
 
     if (order.status === OrderStatus.DELIVERED && status !== OrderStatus.DELIVERED) {
-      throw new BadRequestException('Cannot change status of a delivered order');
+      throw new BadRequestException('No se puede cambiar el estado de una orden entregada');
     }
 
     if (order.status === OrderStatus.CANCELLED) {
-      throw new BadRequestException('Cannot change status of a cancelled order');
+      throw new BadRequestException('No se puede cambiar el estado de una orden cancelada');
     }
 
-    return this.prisma.order.update({
+    const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: { status },
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -261,24 +393,77 @@ export class OrderService {
         },
       },
     });
+
+    // Emitir evento si el pedido cambió a READY_FOR_PICKUP
+    if (status === OrderStatus.READY_FOR_PICKUP && order.status !== OrderStatus.READY_FOR_PICKUP) {
+      this.eventEmitter.emit('order.ready_for_pickup', id);
+    }
+
+    return updatedOrder;
+  }
+
+  async assignConductor(orderId: number, conductorId: number) {
+    const order = await this.findOrderById(orderId);
+    
+    if (order.conductorId) {
+      throw new BadRequestException('La orden ya tiene un conductor asignado');
+    }
+
+    const conductor = await this.prisma.conductor.findUnique({
+      where: { id: conductorId },
+    });
+
+    if (!conductor) {
+      throw new NotFoundException(`Conductor con ID ${conductorId} no encontrado`);
+    }
+
+    if (conductor.estado !== 'DISPONIBLE') {
+      throw new BadRequestException('El conductor no está disponible');
+    }
+
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        conductorId,
+        status: OrderStatus.EN_CAMINO,
+      },
+      include: {
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
+        items: {
+          include: {
+            product: true,
+          },
+        },
+      },
+    });
   }
 
   async cancelOrder(id: number) {
     const order = await this.findOrderById(id);
 
     if (order.status === OrderStatus.DELIVERED) {
-      throw new BadRequestException('Cannot cancel a delivered order');
+      throw new BadRequestException('No se puede cancelar una orden entregada');
     }
 
     if (order.status === OrderStatus.CANCELLED) {
-      throw new BadRequestException('Order is already cancelled');
+      throw new BadRequestException('La orden ya está cancelada');
     }
 
     return this.prisma.order.update({
       where: { id },
       data: { status: OrderStatus.CANCELLED },
       include: {
-        user: true,
+        cliente: {
+          include: { usuario: true },
+        },
+        conductor: {
+          include: { usuario: true },
+        },
         items: {
           include: {
             product: true,
@@ -299,5 +484,10 @@ export class OrderService {
       where: { id },
     });
   }
-}
 
+  // ==================== MÉTODOS LEGACY (compatibilidad) ====================
+
+  async findOrdersByUserId(userId: number) {
+    return this.findOrdersByClienteId(userId);
+  }
+}

@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { OrderController } from './order.controller';
 import { OrderService } from './order.service';
 import { MenuModule } from '../menu/menu.module';
 import { UserModule } from '../user/user.module';
 
 @Module({
-  imports: [MenuModule, UserModule],
+  imports: [EventEmitterModule, MenuModule, UserModule],
   controllers: [OrderController],
   providers: [OrderService],
   exports: [OrderService],

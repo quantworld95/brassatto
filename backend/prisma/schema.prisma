@@ -7,30 +7,140 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Category {
-  id          Int       @id @default(autoincrement())
-  name        String    @unique
+// ==================== ENUMS ====================
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  products    Product[]
+enum OrderStatus {
+  CONFIRMED
+  PREPARING
+  READY_FOR_PICKUP
+  EN_CAMINO
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  MOBILE_PAYMENT
+}
+
+enum ConductorEstado {
+  DISPONIBLE
+  OCUPADO
+  DESCONECTADO
+}
+
+enum BatchStatus {
+  CREATED
+  ASSIGNED
+  IN_ROUTE
+  COMPLETED
+  CANCELLED
+}
+
+enum StopStatus {
+  PENDING
+  ARRIVED
+  COMPLETED
+  SKIPPED
+}
+
+// ==================== USUARIOS (Herencia) ====================
+
+model Usuario {
+  id        Int      @id @default(autoincrement())
+  nombre    String
+  ci        String   @unique
+  telefono  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones de herencia (solo una será usada por registro)
+  cliente       Cliente?
+  conductor     Conductor?
+  administrador Administrador?
+
+  @@map("usuarios")
+}
+
+model Cliente {
+  id               Int      @id @default(autoincrement())
+  usuarioId        Int      @unique
+  usuario          Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  telegramId       String   @unique
+  usernameTelegram String?
+  direccion        String?
+  latitud          Decimal? @db.Decimal(10, 8)
+  longitud         Decimal? @db.Decimal(11, 8)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relación con pedidos
+  orders Order[]
+
+  @@map("clientes")
+}
+
+model Conductor {
+  id             Int             @id @default(autoincrement())
+  usuarioId      Int             @unique
+  usuario        Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  email          String          @unique
+  passwordHash   String
+  placa          String
+  latitudActual  Decimal?        @db.Decimal(10, 8)
+  longitudActual Decimal?        @db.Decimal(11, 8)
+  estado         ConductorEstado @default(DESCONECTADO)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  // Relación con pedidos que entrega
+  orders         Order[]
+  // Relación con lotes de entrega
+  deliveryBatches DeliveryBatch[]
+
+  @@map("conductores")
+}
+
+model Administrador {
+  id           Int      @id @default(autoincrement())
+  usuarioId    Int      @unique
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  email        String   @unique
+  passwordHash String
+  cargo        String
+  esSuperAdmin Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("administradores")
+}
+
+// ==================== MENÚ ====================
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
 
   @@map("categories")
 }
 
 model Product {
-  id            Int       @id @default(autoincrement())
-  name          String    @unique
+  id            Int         @id @default(autoincrement())
+  name          String      @unique
   description   String?
-  price         Decimal   @db.Decimal(10, 2)
-
-  isBestSeller  Boolean   @default(false)
-  isAvailable   Boolean   @default(true)
-  sideDishCount Int       @default(0)
+  price         Decimal     @db.Decimal(10, 2)
+  isBestSeller  Boolean     @default(false)
+  isAvailable   Boolean     @default(true)
+  sideDishCount Int         @default(0)
   categoryId    Int
-  category      Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  category      Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
   orderItems    OrderItem[]
 
   @@map("products")
@@ -47,66 +157,47 @@ model SideDish {
   @@map("side_dishes")
 }
 
-model User {
-  id         Int      @id @default(autoincrement())
-  telegramId String   @unique
-  firstName  String?
-  lastName   String?
-  username   String?
-  phone      String?
-  address    String?
-  latitude   Decimal? @db.Decimal(10, 8)
-  longitude  Decimal? @db.Decimal(11, 8)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @default(now())
-  orders     Order[]
-
-  @@map("users")
-}
-
-enum OrderStatus {
-  PENDING
-  CONFIRMED
-  PREPARING
-  READY
-  DELIVERED
-  CANCELLED
-}
-
-enum PaymentMethod {
-  CASH
-  CARD
-  TRANSFER
-  MOBILE_PAYMENT
-}
+// ==================== PEDIDOS ====================
 
 model Order {
-  id            Int           @id @default(autoincrement())
-  userId        Int
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status        OrderStatus   @default(PENDING)
+  id            Int            @id @default(autoincrement())
+  
+  // Relación con Cliente (quien realiza el pedido)
+  clienteId     Int
+  cliente       Cliente        @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  
+  // Relación con Conductor (quien entrega) - opcional hasta asignación
+  conductorId   Int?
+  conductor     Conductor?     @relation(fields: [conductorId], references: [id], onDelete: SetNull)
+  
+  status        OrderStatus    @default(CONFIRMED)
   paymentMethod PaymentMethod?
-  total         Decimal       @db.Decimal(10, 2)
+  total         Decimal        @db.Decimal(10, 2)
   address       String?
-  latitude      Decimal?      @db.Decimal(10, 8)
-  longitude     Decimal?      @db.Decimal(11, 8)
+  latitude      Decimal?       @db.Decimal(10, 8)
+  longitude     Decimal?       @db.Decimal(11, 8)
   notes         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  // Relación con items del pedido
   items         OrderItem[]
+  
+  // Relación con parada de entrega
+  deliveryStop  DeliveryStop?
 
   @@map("orders")
 }
 
 model OrderItem {
-  id        Int                 @id @default(autoincrement())
-  orderId   Int
-  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId Int
-  product   Product             @relation(fields: [productId], references: [id])
-  quantity  Int                 @default(1)
-  price     Decimal             @db.Decimal(10, 2)
-  createdAt DateTime            @default(now())
+  id         Int                 @id @default(autoincrement())
+  orderId    Int
+  order      Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId  Int
+  product    Product             @relation(fields: [productId], references: [id])
+  quantity   Int                 @default(1)
+  price      Decimal             @db.Decimal(10, 2)
+  createdAt  DateTime            @default(now())
   sideDishes OrderItemSideDish[]
 
   @@map("order_items")
@@ -124,3 +215,45 @@ model OrderItemSideDish {
   @@map("order_item_side_dishes")
 }
 
+// ==================== SISTEMA DE ENTREGAS ====================
+
+model DeliveryBatch {
+  id          Int         @id @default(autoincrement())
+  
+  // Relación con Conductor
+  conductorId Int
+  conductor   Conductor   @relation(fields: [conductorId], references: [id], onDelete: Cascade)
+  
+  startTime   DateTime?
+  endTime     DateTime?
+  status      BatchStatus @default(CREATED)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relación con paradas
+  stops       DeliveryStop[]
+
+  @@map("delivery_batches")
+}
+
+model DeliveryStop {
+  id        Int        @id @default(autoincrement())
+  
+  // Relación con DeliveryBatch
+  batchId   Int
+  batch     DeliveryBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  
+  // Relación con Order (1 a 1)
+  orderId   Int        @unique
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  sequence   Int        // Orden de la parada en la ruta
+  plannedAt  DateTime?  // Hora planificada de llegada
+  arrivedAt  DateTime?  // Hora real de llegada
+  leftAt     DateTime?  // Hora de salida
+  stopStatus StopStatus @default(PENDING)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@map("delivery_stops")
+}
