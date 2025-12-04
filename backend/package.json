@@ -21,7 +21,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "clean:db": "ts-node scripts/clean-database.ts"
   },
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.2",

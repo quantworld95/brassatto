@@ -18,6 +18,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const host = process.env.REDIS_HOST || 'localhost';
     const port = parseInt(process.env.REDIS_PORT || '6379', 10);
 
+    this.logger.log(`Intentando conectar a Redis en ${host}:${port}...`);
+
     this.client = new Redis({
       host,
       port,
@@ -42,9 +44,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.client.on('connect', () => {
+      this.logger.debug(`Conectando a Redis en ${host}:${port}...`);
+    });
+
+    this.client.on('ready', () => {
       this.isRedisAvailable = true;
       this.connectionAttempts = 0;
-      this.logger.log(`✅ Conectado a Redis en ${host}:${port}`);
+      this.logger.log(`✅ Conectado y listo en Redis ${host}:${port}`);
     });
 
     this.client.on('error', (error) => {
@@ -150,10 +156,32 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   /**
    * Verifica si Redis está conectado.
    *
-   * @returns true si está conectado
+   * @returns true si está conectado y listo
    */
   isConnected(): boolean {
-    return this.isRedisAvailable && this.client?.status === 'ready';
+    // Verificar tanto el flag interno como el estado del cliente
+    const status = this.client?.status;
+    const isReady = status === 'ready' || status === 'connect';
+    return this.isRedisAvailable && isReady && !!this.client;
+  }
+
+  /**
+   * Verifica la conexión haciendo un ping a Redis.
+   * Útil para verificar que Redis realmente responde.
+   *
+   * @returns Promise<boolean> true si Redis responde
+   */
+  async ping(): Promise<boolean> {
+    if (!this.client) {
+      return false;
+    }
+
+    try {
+      const result = await this.client.ping();
+      return result === 'PONG';
+    } catch (error) {
+      return false;
+    }
   }
 
   /**

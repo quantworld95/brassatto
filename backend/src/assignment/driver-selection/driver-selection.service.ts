@@ -57,42 +57,55 @@ export class DriverSelectionService {
       // Intentar obtener posición actualizada de Redis
       let coordinates: { latitude: number; longitude: number };
 
-      try {
-        const key = `driver:${c.id}:location`;
-        const locationJson = await this.redisService.get(key);
-
-        if (locationJson) {
-          // Parsear JSON de Redis
-          const location = JSON.parse(locationJson);
-          coordinates = {
-            latitude: location.lat,
-            longitude: location.lng,
-          };
-
-          this.logger.debug(
-            `Posición actualizada de Redis para conductor #${c.id}`,
-          );
-        } else {
-          // Fallback a BD si no hay en Redis
-          coordinates = {
-            latitude: Number(c.latitudActual),
-            longitude: Number(c.longitudActual),
-          };
-
-          this.logger.debug(
-            `Usando posición de BD para conductor #${c.id} (no hay en Redis)`,
-          );
-        }
-      } catch (error) {
-        // Si hay error con Redis, usar BD como fallback
+      // Verificar si Redis está conectado
+      const isRedisConnected = this.redisService.isConnected();
+      
+      if (!isRedisConnected) {
         this.logger.warn(
-          `Error al leer de Redis para conductor #${c.id}, usando BD:`,
-          error,
+          `Redis no está conectado. Usando posición de BD para conductor #${c.id}`,
         );
         coordinates = {
           latitude: Number(c.latitudActual),
           longitude: Number(c.longitudActual),
         };
+      } else {
+        try {
+          const key = `driver:${c.id}:location`;
+          const locationJson = await this.redisService.get(key);
+
+          if (locationJson) {
+            // Parsear JSON de Redis
+            const location = JSON.parse(locationJson);
+            coordinates = {
+              latitude: location.lat,
+              longitude: location.lng,
+            };
+
+            this.logger.log(
+              `✅ Posición obtenida de Redis para conductor #${c.id}: (${location.lat}, ${location.lng})`,
+            );
+          } else {
+            // Fallback a BD si no hay en Redis
+            coordinates = {
+              latitude: Number(c.latitudActual),
+              longitude: Number(c.longitudActual),
+            };
+
+            this.logger.warn(
+              `⚠️ No hay ubicación en Redis para conductor #${c.id}. Usando posición de BD: (${c.latitudActual}, ${c.longitudActual})`,
+            );
+          }
+        } catch (error) {
+          // Si hay error con Redis, usar BD como fallback
+          this.logger.warn(
+            `Error al leer de Redis para conductor #${c.id}, usando BD:`,
+            error,
+          );
+          coordinates = {
+            latitude: Number(c.latitudActual),
+            longitude: Number(c.longitudActual),
+          };
+        }
       }
 
       drivers.push({

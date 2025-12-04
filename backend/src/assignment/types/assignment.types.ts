@@ -37,7 +37,7 @@ export const DEFAULT_ASSIGNMENT_CONFIG: AssignmentConfig = {
   weightEta: 1.0,
   weightIdleTime: 0.5,
   avgSpeedKmh: 25,
-  offerExpirationSeconds: 60,
+  offerExpirationSeconds: 180, // 3 minutos
 };
 
 // ==================== DATOS DE ENTRADA ====================

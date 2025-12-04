@@ -225,7 +225,27 @@ function conectarConductor() {
 
   socket.on('trip.accepted', (data) => {
     console.log('✅ Oferta aceptada:', data);
-    alert('✅ Oferta aceptada exitosamente!');
+    
+    // Mostrar mensaje de éxito
+    const container = document.getElementById('trip-offer-container');
+    if (container) {
+      container.innerHTML = `
+        <div class="card" style="margin-top: 20px; border: 2px solid #10b981;">
+          <div class="card-title" style="background: #10b981; color: white; padding: 15px; text-align: center;">
+            <div style="font-size: 24px; margin-bottom: 10px;">✅</div>
+            <div style="font-size: 18px; font-weight: bold;">¡OFERTA ACEPTADA EXITOSAMENTE!</div>
+            <div style="font-size: 12px; opacity: 0.9; margin-top: 5px;">Los cambios se han guardado en la base de datos</div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Usar la oferta que ya tenemos almacenada (el frontend maneja sus propios datos)
+    if (tripOffer) {
+      setTimeout(() => {
+        showTripMap(tripOffer);
+      }, 1000);
+    }
   });
 
   socket.on('trip.rejected', (data) => {
@@ -248,26 +268,64 @@ function startLocationUpdates() {
   // Intentar obtener ubicación GPS real primero
   obtenerUbicacionGPS();
   
+  // Función para enviar ubicación (reutilizable)
+  const sendLocationUpdate = () => {
+    // Solo enviar si el socket está conectado
+    if (!socket || !socket.connected) {
+      console.warn('⚠️ Socket no conectado, no se puede enviar ubicación');
+      return;
+    }
+    
+    // Enviar ubicación al servidor (esto actualiza Redis y renueva el TTL)
+    const sent = sendLocation();
+    
+    if (sent) {
+      console.log('📍 Ubicación enviada a Redis (renovando TTL)');
+    }
+    
+    // También actualizar el mapa con la ubicación actual (por si cambió manualmente)
+    // Solo si estamos en la vista del conductor y el mapa está visible
+    if (driverMap && driverMarker && currentLocation) {
+      try {
+        driverMarker.setPosition(currentLocation);
+        // Solo hacer pan si la diferencia es significativa (más de 10 metros)
+        const currentCenter = driverMap.getCenter();
+        if (currentCenter) {
+          const latDiff = Math.abs(currentCenter.lat() - currentLocation.lat);
+          const lngDiff = Math.abs(currentCenter.lng() - currentLocation.lng);
+          // Si la diferencia es mayor a ~0.0001 grados (~11 metros), ajustar el mapa
+          if (latDiff > 0.0001 || lngDiff > 0.0001) {
+            driverMap.panTo(currentLocation);
+          }
+        }
+      } catch (error) {
+        // El mapa puede no estar disponible si estamos en otra vista, ignorar error
+        console.debug('Mapa no disponible para actualizar (probablemente en otra vista)');
+      }
+    }
+  };
+  
   // Enviar ubicación cada 5 segundos
+  // Usar setInterval - los navegadores modernos no lo pausan completamente, solo reducen frecuencia mínima
   locationInterval = setInterval(() => {
     // Intentar obtener GPS real, si falla usa la actual
     obtenerUbicacionGPS(true);
     
-    // También actualizar el mapa con la ubicación actual (por si cambió manualmente)
-    if (driverMap && driverMarker && currentLocation) {
-      driverMarker.setPosition(currentLocation);
-      // Solo hacer pan si la diferencia es significativa (más de 10 metros)
-      const currentCenter = driverMap.getCenter();
-      if (currentCenter) {
-        const latDiff = Math.abs(currentCenter.lat() - currentLocation.lat);
-        const lngDiff = Math.abs(currentCenter.lng() - currentLocation.lng);
-        // Si la diferencia es mayor a ~0.0001 grados (~11 metros), ajustar el mapa
-        if (latDiff > 0.0001 || lngDiff > 0.0001) {
-          driverMap.panTo(currentLocation);
-        }
-      }
-    }
+    // Enviar ubicación
+    sendLocationUpdate();
   }, 5000);
+  
+  // También usar Page Visibility API para asegurar envío cuando la pestaña vuelve a estar activa
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && socket && socket.connected) {
+      // Cuando la pestaña vuelve a estar visible, enviar ubicación inmediatamente
+      console.log('🔄 Pestaña visible nuevamente, enviando ubicación...');
+      obtenerUbicacionGPS(true);
+      sendLocationUpdate();
+    }
+  });
+  
+  console.log('✅ Actualizaciones de ubicación iniciadas (cada 5 segundos, incluso en pestañas inactivas)');
 }
 
 function stopLocationUpdates() {
@@ -688,57 +746,147 @@ function showTripOffer(offer) {
   const container = document.getElementById('trip-offer-container');
   if (!container) return;
 
-  // Crear puntos para la ruta
-  const routePoints = [
-    offer.restaurant.coordinates,
-    ...offer.stops.map(stop => stop.coordinates || stop),
-  ];
+  // Ordenar stops por secuencia
+  const sortedStops = [...offer.stops].sort((a, b) => a.sequence - b.sequence);
+
+  // Calcular tiempo de expiración
+  const expiresAt = new Date(offer.expiresAt);
+  const now = new Date();
+  const secondsLeft = Math.max(0, Math.floor((expiresAt - now) / 1000));
 
   container.innerHTML = `
-    <div class="trip-offer">
-      <h3>💌 NUEVA OFERTA RECIBIDA</h3>
+    <div class="card" style="margin-top: 20px; border: 2px solid #8b5cf6;">
+      <div class="card-title" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: white; padding: 15px; border-radius: 8px 8px 0 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 20px; font-weight: bold;">💌 NUEVA OFERTA DE VIAJE</div>
+            <div style="font-size: 12px; opacity: 0.9; margin-top: 5px;">Tiempo restante: <span id="offer-timer">${secondsLeft}s</span></div>
+          </div>
+        </div>
+      </div>
       
-      <div class="trip-info">
-        <div class="trip-info-item">
-          <div class="label">Pedidos</div>
-          <div class="value">${offer.summary.totalOrders}</div>
+      <div style="padding: 20px;">
+        <!-- Resumen de la oferta -->
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px;">
+          <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 12px; color: #888; margin-bottom: 5px;">📦 Pedidos</div>
+            <div style="font-size: 24px; font-weight: bold; color: #8b5cf6;">${offer.summary.totalOrders}</div>
+          </div>
+          <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 12px; color: #888; margin-bottom: 5px;">📏 Distancia</div>
+            <div style="font-size: 24px; font-weight: bold; color: #10b981;">${offer.summary.totalDistanceKm.toFixed(2)} km</div>
+          </div>
+          <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 12px; color: #888; margin-bottom: 5px;">⏱️ Tiempo Est.</div>
+            <div style="font-size: 24px; font-weight: bold; color: #f59e0b;">${offer.summary.estimatedTimeMinutes.toFixed(0)} min</div>
+          </div>
+          <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 12px; color: #888; margin-bottom: 5px;">💰 Ganancia</div>
+            <div style="font-size: 24px; font-weight: bold; color: #10b981;">Bs ${offer.summary.estimatedEarnings.toFixed(2)}</div>
+          </div>
         </div>
-        <div class="trip-info-item">
-          <div class="label">Distancia</div>
-          <div class="value">${offer.summary.totalDistanceKm.toFixed(2)} km</div>
-        </div>
-        <div class="trip-info-item">
-          <div class="label">Tiempo</div>
-          <div class="value">${offer.summary.estimatedTimeMinutes.toFixed(0)} min</div>
-        </div>
-        <div class="trip-info-item">
-          <div class="label">Ganancia</div>
-          <div class="value">Bs ${offer.summary.estimatedEarnings.toFixed(2)}</div>
-        </div>
-      </div>
 
-      <div class="map-container">
-        <div id="trip-map" style="width: 100%; height: 100%;"></div>
-      </div>
+        <!-- Restaurante -->
+        <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #f59e0b;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="font-size: 24px;">🏪</div>
+            <div>
+              <div style="font-weight: bold; color: #f59e0b; margin-bottom: 3px;">PUNTO DE RECOGIDA</div>
+              <div style="font-size: 14px; color: #ccc;">${offer.restaurant.name}</div>
+              <div style="font-size: 12px; color: #888;">${offer.restaurant.address}</div>
+            </div>
+          </div>
+        </div>
 
-      <div class="trip-actions">
-        <button class="btn btn-primary" onclick="aceptarOferta('${offer.offerId}')">
-          ✅ ACEPTAR
-        </button>
-        <button class="btn btn-danger" onclick="rechazarOferta('${offer.offerId}')">
-          ❌ RECHAZAR
-        </button>
+        <!-- Secuencia de entregas -->
+        <div style="margin-bottom: 20px;">
+          <div style="font-weight: bold; margin-bottom: 10px; color: #8b5cf6;">📍 SECUENCIA DE ENTREGAS</div>
+          ${sortedStops.map((stop, index) => `
+            <div style="background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #8b5cf6; position: relative;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                <div style="background: #8b5cf6; color: white; width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; flex-shrink: 0;">
+                  ${stop.sequence}
+                </div>
+                <div style="flex: 1;">
+                  <div style="font-weight: bold; color: #ccc; margin-bottom: 5px;">
+                    Entrega #${stop.sequence}
+                    ${stop.etaMinutes ? `<span style="color: #888; font-size: 12px; margin-left: 10px;">⏱️ ETA: ${stop.etaMinutes} min</span>` : ''}
+                  </div>
+                  ${stop.address ? `
+                    <div style="font-size: 13px; color: #888; margin-bottom: 3px;">${stop.address}</div>
+                  ` : ''}
+                  ${stop.approximateZone ? `
+                    <div style="font-size: 12px; color: #666;">📍 Zona: ${stop.approximateZone}</div>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <!-- Botones de acción -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px;">
+          <button class="btn btn-danger" onclick="rechazarOferta('${offer.offerId}')" style="width: 100%; padding: 15px; font-size: 16px; font-weight: bold;">
+            ❌ RECHAZAR
+          </button>
+          <button class="btn btn-primary" onclick="aceptarOferta('${offer.offerId}')" style="width: 100%; padding: 15px; font-size: 16px; font-weight: bold;">
+            ✅ ACEPTAR
+          </button>
+        </div>
       </div>
     </div>
   `;
 
+  // Iniciar contador de tiempo restante
+  startOfferTimer(offer.expiresAt);
+}
+
+// Mostrar mapa con ruta después de aceptar
+function showTripMap(offer) {
+  const container = document.getElementById('trip-offer-container');
+  if (!container) return;
+
+  // Obtener coordenadas de las paradas desde _internal.optimizedRoute
+  // Si no tiene _internal, usar stops (fallback)
+  let routePoints = [offer.restaurant.coordinates];
+  
+  if (offer._internal && offer._internal.optimizedRoute) {
+    routePoints = [
+      offer.restaurant.coordinates,
+      ...offer._internal.optimizedRoute.map(stop => stop.coordinates),
+    ];
+  } else if (offer.stops && offer.stops.length > 0) {
+    // Fallback: intentar obtener coordenadas de stops si están disponibles
+    console.warn('⚠️ No se encontraron datos _internal, usando stops como fallback');
+    routePoints = [offer.restaurant.coordinates];
+  }
+
+  // Agregar mapa al contenedor
+  const mapCard = `
+    <div class="card" style="margin-top: 20px; border: 2px solid #10b981;">
+      <div class="card-title" style="background: #10b981; color: white; padding: 15px;">
+        🗺️ RUTA DE ENTREGA
+      </div>
+      <div class="map-container" style="height: 400px;">
+        <div id="trip-map" style="width: 100%; height: 100%;"></div>
+      </div>
+    </div>
+  `;
+
+  container.insertAdjacentHTML('beforeend', mapCard);
+
   // Inicializar mapa con ruta
   setTimeout(() => {
     initTripMap(offer, routePoints);
-  }, 100);
+  }, 200);
 }
 
 function initTripMap(offer, routePoints) {
+  if (!MapHelper.isAvailable()) {
+    console.warn('⚠️ Google Maps no está disponible');
+    return;
+  }
+
   const map = MapHelper.createMap('trip-map', routePoints[0], 13);
 
   // Agregar marcador del restaurante
@@ -750,17 +898,33 @@ function initTripMap(offer, routePoints) {
     '🏪'
   );
 
-  // Agregar marcadores de destinos
-  offer.stops.forEach((stop, index) => {
-    const coords = stop.coordinates || stop;
-    MapHelper.addMarker(
-      map,
-      coords,
-      `Cliente ${index + 1}: ${stop.address || 'Dirección'}`,
-      null,
-      (index + 1).toString()
-    );
-  });
+  // Agregar marcadores de destinos (usar optimizedRoute para coordenadas)
+  if (offer._internal && offer._internal.optimizedRoute) {
+    offer._internal.optimizedRoute.forEach((stop) => {
+      MapHelper.addMarker(
+        map,
+        stop.coordinates,
+        `Entrega #${stop.sequence}: ${stop.address || 'Dirección'}`,
+        null,
+        stop.sequence.toString()
+      );
+    });
+  } else if (offer.stops) {
+    // Fallback: usar stops si no hay optimizedRoute
+    offer.stops.forEach((stop, index) => {
+      // Buscar coordenadas en el stop si están disponibles
+      const coords = stop.coordinates || (offer._internal && offer._internal.optimizedRoute && offer._internal.optimizedRoute[index] ? offer._internal.optimizedRoute[index].coordinates : null);
+      if (coords) {
+        MapHelper.addMarker(
+          map,
+          coords,
+          `Entrega #${stop.sequence || (index + 1)}: ${stop.address || 'Dirección'}`,
+          null,
+          (stop.sequence || (index + 1)).toString()
+        );
+      }
+    });
+  }
 
   // Agregar marcador del conductor
   if (currentLocation) {
@@ -774,10 +938,43 @@ function initTripMap(offer, routePoints) {
   }
 
   // Dibujar ruta
-  MapHelper.drawRoute(map, routePoints, '#8b5cf6');
+  MapHelper.drawRoute(map, routePoints, '#10b981');
 
-  // Ajustar vista
-  MapHelper.fitBounds(map, routePoints);
+  // Ajustar vista para incluir todos los puntos
+  const allPoints = [currentLocation, ...routePoints];
+  MapHelper.fitBounds(map, allPoints);
+}
+
+// Contador de tiempo restante para la oferta
+function startOfferTimer(expiresAt) {
+  const timerElement = document.getElementById('offer-timer');
+  if (!timerElement) return;
+
+  const updateTimer = () => {
+    const now = new Date();
+    const expires = new Date(expiresAt);
+    const secondsLeft = Math.max(0, Math.floor((expires - now) / 1000));
+
+    if (secondsLeft <= 0) {
+      timerElement.textContent = 'EXPIRADA';
+      timerElement.style.color = '#ef4444';
+      return;
+    }
+
+    const minutes = Math.floor(secondsLeft / 60);
+    const seconds = secondsLeft % 60;
+    timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+    if (secondsLeft <= 10) {
+      timerElement.style.color = '#ef4444';
+    } else if (secondsLeft <= 30) {
+      timerElement.style.color = '#f59e0b';
+    }
+
+    setTimeout(updateTimer, 1000);
+  };
+
+  updateTimer();
 }
 
 function aceptarOferta(offerId) {

@@ -175,8 +175,10 @@ export class OfferService implements OnModuleInit {
 
     const timeout = setTimeout(() => {
       this.logger.log(`Oferta ${offerId.slice(0, 8)} expirada automáticamente`);
-      this.eventEmitter.emit('driver.offer_expired', offerId);
+      // Remover antes de emitir el evento para evitar condición de carrera
       this.removeOffer(offerId);
+      // Emitir evento después de remover
+      this.eventEmitter.emit('driver.offer_expired', offerId);
     }, expirationTime);
 
     this.expirationTimeouts.set(offerId, timeout);

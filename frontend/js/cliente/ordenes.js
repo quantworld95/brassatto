@@ -2,10 +2,12 @@
 // ============================================
 
 // 1. ÓRDENES PREDEFINIDAS
+// Cada orden tiene un clienteId diferente (IDs de la tabla clientes)
 const ordenesPredefinidas = [
   {
     id: 1,
     nombre: 'Pedido 1 - Pizza',
+    clienteId: 28, // Cliente Uno (id: 28, usuarioId: 68)
     items: [{ productId: 1, quantity: 1, sideDishIds: [] }],
     total: 50.00,
     lat: -17.7833,
@@ -14,6 +16,7 @@ const ordenesPredefinidas = [
   {
     id: 2,
     nombre: 'Pedido 2 - Hamburguesa',
+    clienteId: 29, // Cliente Dos (id: 29, usuarioId: 69)
     items: [{ productId: 2, quantity: 1, sideDishIds: [] }],
     total: 75.00,
     lat: -17.7900,
@@ -22,14 +25,13 @@ const ordenesPredefinidas = [
   {
     id: 3,
     nombre: 'Pedido 3 - Combo',
+    clienteId: 30, // Cliente Tres (id: 30, usuarioId: 70)
     items: [{ productId: 3, quantity: 1, sideDishIds: [] }],
     total: 100.00,
     lat: -17.7850,
     lng: -63.1850,
   },
 ];
-
-const clienteId = 1; // ID del cliente
 
 // 2. INICIALIZAR VISTA
 function initClienteView() {
@@ -268,7 +270,7 @@ async function crearPedido(ordenId) {
 
     // Preparar datos para la API
     const orderData = {
-      clienteId: Number(clienteId),
+      clienteId: Number(orden.clienteId), // Usar clienteId de la orden predefinida
       paymentMethod: 'CASH',
       latitude: latNum,
       longitude: lngNum,

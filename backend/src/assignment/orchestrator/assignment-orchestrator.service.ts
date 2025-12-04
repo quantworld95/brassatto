@@ -190,7 +190,20 @@ export class AssignmentOrchestrator {
       const offer = this.offerService.getOffer(offerId);
 
       if (!offer) {
-        this.logger.error(`Oferta ${offerId} no encontrada`);
+        // Verificar si la oferta expiró
+        this.logger.warn(
+          `Oferta ${offerId} no encontrada. Posiblemente expiró antes de ser aceptada.`,
+        );
+        return;
+      }
+
+      // Verificar si la oferta ya expiró
+      if (offer.expiresAt < new Date()) {
+        this.logger.warn(
+          `Oferta ${offerId.slice(0, 8)} ya expiró (expiración: ${offer.expiresAt.toISOString()})`,
+        );
+        // Remover oferta expirada
+        this.offerService.removeOffer(offerId);
         return;
       }
 
@@ -234,10 +247,8 @@ export class AssignmentOrchestrator {
   async onOfferExpired(offerId: string): Promise<void> {
     this.logger.log(`⏰ Oferta ${offerId.slice(0, 8)} expirada`);
 
-    // Remover oferta del almacén
-    this.offerService.removeOffer(offerId);
-
-    // Registrar expiración
+    // La oferta ya fue removida en OfferService antes de emitir el evento
+    // Solo registrar expiración
     await this.persistenceService.handleExpiration(offerId);
 
     // TODO: Reasignar a otro conductor o reintentar

@@ -5,10 +5,10 @@ import { RestaurantInfo } from '../types/assignment.types';
  */
 export const ORCHESTRATOR_CONFIG = {
   /** Delay en segundos antes de procesar pedidos (para permitir agrupación) */
-  processingDelaySeconds: 120, // 3 minutos
+  processingDelaySeconds: 120, // 2 minutos
 
   /** Tiempo de expiración de una oferta al conductor (segundos) */
-  offerExpirationSeconds: 60, // 1 minuto
+  offerExpirationSeconds: 180, // 3 minutos
 
   /** Máximo de intentos de reasignación si un conductor rechaza */
   maxReassignAttempts: 3,

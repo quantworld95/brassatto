@@ -33,15 +33,27 @@ export class ClusteringService {
    * - status = READY_FOR_PICKUP
    * - Tiene coordenadas del cliente
    * - No está ya asignado a un DeliveryStop
+   * - Fue actualizado recientemente (últimas 24 horas) para evitar pedidos antiguos huérfanos
    */
   async getEligibleOrders(): Promise<EligibleOrder[]> {
+    // Filtro de tiempo: solo considerar pedidos actualizados en las últimas 24 horas
+    // Esto evita incluir pedidos antiguos que quedaron huérfanos en la BD
+    const maxAgeHours = 24;
+    const minUpdatedAt = new Date();
+    minUpdatedAt.setHours(minUpdatedAt.getHours() - maxAgeHours);
+
     const orders = await this.prisma.order.findMany({
       where: {
         status: 'READY_FOR_PICKUP',
         latitude: { not: null },
         longitude: { not: null },
-        // No debe estar ya en un DeliveryStop
+        // No debe estar ya en un DeliveryStop (ya asignado a un batch)
         deliveryStop: null,
+        // Solo considerar pedidos actualizados recientemente (últimas 24 horas)
+        // Esto excluye pedidos antiguos que pueden haber quedado huérfanos
+        updatedAt: {
+          gte: minUpdatedAt,
+        },
       },
       include: {
         cliente: {
@@ -51,7 +63,7 @@ export class ClusteringService {
         },
       },
       orderBy: {
-        updatedAt: 'asc', // Los más antiguos primero
+        updatedAt: 'asc', // Los más antiguos primero (dentro del rango de 24h)
       },
     });
 

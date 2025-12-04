@@ -66,15 +66,54 @@ export class OfferGateway
   /**
    * Maneja la desconexión de un conductor.
    */
-  handleDisconnect(client: Socket) {
+  async handleDisconnect(client: Socket) {
     // Obtener driverId del socket
     const driverId = this.socketToDriver.get(client.id);
     
     if (driverId) {
+      // Intentar obtener la última ubicación de Redis antes de desconectar
+      let lastLocation = null;
+      try {
+        if (this.redisService.isConnected()) {
+          const key = `driver:${driverId}:location`;
+          const locationJson = await this.redisService.get(key);
+          if (locationJson) {
+            lastLocation = JSON.parse(locationJson);
+            this.logger.debug(
+              `Última ubicación obtenida de Redis para conductor #${driverId}: (${lastLocation.lat}, ${lastLocation.lng})`,
+            );
+          }
+        }
+      } catch (error) {
+        this.logger.debug(`No se pudo obtener última ubicación de Redis para conductor #${driverId}:`, error);
+      }
+      
       // Limpiar ambas relaciones
       this.socketToDriver.delete(client.id);
       this.connectedDrivers.delete(driverId);
-      this.logger.log(`Conductor #${driverId} desconectado`);
+      
+      // Actualizar estado y última ubicación en BD
+      try {
+        const updateData: any = { estado: 'DESCONECTADO' };
+        
+        // Si tenemos la última ubicación de Redis, guardarla en BD
+        if (lastLocation) {
+          updateData.latitudActual = lastLocation.lat;
+          updateData.longitudActual = lastLocation.lng;
+          this.logger.log(
+            `Conductor #${driverId} desconectado - Estado: DESCONECTADO, Última ubicación guardada: (${lastLocation.lat}, ${lastLocation.lng})`,
+          );
+        } else {
+          this.logger.log(`Conductor #${driverId} desconectado - Estado actualizado a DESCONECTADO`);
+        }
+        
+        await this.prisma.conductor.update({
+          where: { id: driverId },
+          data: updateData,
+        });
+      } catch (error) {
+        this.logger.error(`Error al actualizar estado del conductor #${driverId} a DESCONECTADO:`, error);
+      }
     } else {
       this.logger.debug(`Cliente desconectado sin identificar: ${client.id}`);
     }
@@ -95,11 +134,30 @@ export class OfferGateway
       return;
     }
 
+    // Verificar que el conductor existe
+    const conductor = await this.prisma.conductor.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!conductor) {
+      client.emit('error', { message: `Conductor #${driverId} no encontrado` });
+      return;
+    }
+
     // Guardar ambas relaciones
     this.socketToDriver.set(client.id, driverId);
     this.connectedDrivers.set(driverId, client);
     
-    this.logger.log(`Conductor #${driverId} conectado (socket: ${client.id})`);
+    // Cambiar estado del conductor a DISPONIBLE cuando se conecta
+    try {
+      await this.prisma.conductor.update({
+        where: { id: driverId },
+        data: { estado: 'DISPONIBLE' },
+      });
+      this.logger.log(`Conductor #${driverId} conectado - Estado actualizado a DISPONIBLE`);
+    } catch (error) {
+      this.logger.error(`Error al actualizar estado del conductor #${driverId} a DISPONIBLE:`, error);
+    }
     
     // Inicializar ubicación desde BD si no hay en Redis
     await this.initializeDriverLocation(driverId);
@@ -147,11 +205,22 @@ export class OfferGateway
         timestamp: Date.now(),
       });
 
-      // Guardar en Redis con TTL de 60 segundos
-      await this.redisService.set(key, value, 60);
+      // Verificar si Redis está disponible
+      if (!this.redisService.isConnected()) {
+        this.logger.warn(
+          `Redis no está conectado. No se puede guardar ubicación del conductor #${driverId}`,
+        );
+        client.emit('error', { message: 'Redis no disponible' });
+        return;
+      }
 
-      this.logger.debug(
-        `Ubicación actualizada para conductor #${driverId}: (${lat}, ${lng})`,
+      // Guardar en Redis con TTL de 600 segundos (10 minutos)
+      // Esto asegura que la ubicación esté disponible incluso si el conductor cambia de vista
+      // El TTL se refresca cada vez que se envía una nueva ubicación
+      await this.redisService.set(key, value, 600);
+
+      this.logger.log(
+        `✅ Ubicación guardada en Redis para conductor #${driverId}: (${lat}, ${lng}) - TTL: 600s (10 min)`,
       );
     } catch (error) {
       this.logger.error(
@@ -182,7 +251,7 @@ export class OfferGateway
     // Emitir evento para que el orquestador lo maneje
     this.eventEmitter.emit('driver.offer_accepted', offerId);
 
-    // Confirmar al conductor
+    // Confirmar al conductor (solo emitir evento, sin lógica de frontend)
     client.emit('trip.accepted', {
       offerId,
       message: 'Oferta aceptada, procesando...',
@@ -236,14 +305,8 @@ export class OfferGateway
       `Enviando oferta ${offer.offerId.slice(0, 8)} a conductor #${driverId}`,
     );
 
-    // Enviar la oferta por WebSocket
-    socket.emit('trip.offer', {
-      offerId: offer.offerId,
-      restaurant: offer.restaurant,
-      stops: offer.stops,
-      summary: offer.summary,
-      expiresAt: offer.expiresAt,
-    });
+    // Enviar la oferta completa por WebSocket (solo datos estructurados, sin lógica de frontend)
+    socket.emit('trip.offer', offer);
   }
 
   /**
@@ -291,6 +354,14 @@ export class OfferGateway
       });
 
       if (conductor?.latitudActual && conductor?.longitudActual) {
+        // Verificar si Redis está disponible
+        if (!this.redisService.isConnected()) {
+          this.logger.warn(
+            `Redis no está conectado. No se puede inicializar ubicación del conductor #${driverId}`,
+          );
+          return;
+        }
+
         // Guardar ubicación inicial en Redis
         const value = JSON.stringify({
           lat: Number(conductor.latitudActual),
@@ -299,7 +370,12 @@ export class OfferGateway
           source: 'database', // Indica que viene de BD, no de GPS
         });
 
-        await this.redisService.set(key, value, 60);
+        // Guardar con TTL de 600 segundos (10 minutos) para que esté disponible incluso si el conductor cambia de vista
+        await this.redisService.set(key, value, 600);
+        
+        this.logger.log(
+          `✅ Ubicación inicial guardada en Redis para conductor #${driverId} desde BD: (${conductor.latitudActual}, ${conductor.longitudActual}) - TTL: 600s (10 min)`,
+        );
         
         this.logger.debug(
           `Ubicación inicializada desde BD para conductor #${driverId}: (${conductor.latitudActual}, ${conductor.longitudActual})`,
